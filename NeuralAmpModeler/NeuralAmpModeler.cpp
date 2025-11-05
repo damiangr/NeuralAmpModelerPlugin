@@ -1,6 +1,7 @@
 #include <algorithm> // std::clamp, std::min
 #include <cmath> // pow
 #include <filesystem>
+#include <fstream> // std::ifstream for file reading
 #include <iostream>
 #include <utility>
 
@@ -73,7 +74,6 @@ const std::string kCalibrateInputParamName = "CalibrateInput";
 const bool kDefaultCalibrateInput = false;
 const std::string kInputCalibrationLevelParamName = "InputCalibrationLevel";
 const double kDefaultInputCalibrationLevel = 12.0;
-
 
 NeuralAmpModeler::NeuralAmpModeler(const InstanceInfo& info)
 : Plugin(info, MakeConfig(kNumParams, kNumPresets))
@@ -183,7 +183,6 @@ NeuralAmpModeler::NeuralAmpModeler(const InstanceInfo& info)
       {
         // Sets mNAMPath and mStagedNAM
         const std::string msg = _StageModel(fileName);
-        // TODO error messages like the IR loader.
         if (msg.size())
         {
           std::stringstream ss;
@@ -413,10 +412,66 @@ bool NeuralAmpModeler::SerializeState(IByteChunk& chunk) const
   // Plugin version, so we can load legacy serialized states in the future!
   WDL_String version(PLUG_VERSION_STR);
   chunk.PutStr(version.Get());
-  // Model directory (don't serialize the model itself; we'll just load it again
-  // when we unserialize)
+
+  // Serialize file paths for backward compatibility
   chunk.PutStr(mNAMPath.Get());
   chunk.PutStr(mIRPath.Get());
+
+  // NEW: Embed the actual file data for portability
+  // Store NAM model data
+  if (mNAMData.empty() && mNAMPath.GetLength() > 0)
+  {
+    // Read the NAM file if we haven't already
+    std::ifstream file(mNAMPath.Get(), std::ios::binary | std::ios::ate);
+    if (file.is_open())
+    {
+      std::streamsize size = file.tellg();
+      file.seekg(0, std::ios::beg);
+
+      mNAMData.resize(static_cast<size_t>(size));
+      if (!file.read(reinterpret_cast<char*>(mNAMData.data()), size))
+      {
+        mNAMData.clear();
+      }
+      file.close();
+    }
+  }
+
+  // Store the size of NAM data, then the data itself
+  int namDataSize = static_cast<int>(mNAMData.size());
+  chunk.Put(&namDataSize);
+  if (namDataSize > 0)
+  {
+    chunk.PutBytes(mNAMData.data(), namDataSize);
+  }
+
+  // Store IR data
+  if (mIRData.empty() && mIRPath.GetLength() > 0)
+  {
+    // Read the IR file if we haven't already
+    std::ifstream irFile(mIRPath.Get(), std::ios::binary | std::ios::ate);
+    if (irFile.is_open())
+    {
+      std::streamsize irSize = irFile.tellg();
+      irFile.seekg(0, std::ios::beg);
+
+      mIRData.resize(static_cast<size_t>(irSize));
+      if (!irFile.read(reinterpret_cast<char*>(mIRData.data()), irSize))
+      {
+        mIRData.clear();
+      }
+      irFile.close();
+    }
+  }
+
+  // Store the size of IR data, then the data itself
+  int irDataSize = static_cast<int>(mIRData.size());
+  chunk.Put(&irDataSize);
+  if (irDataSize > 0)
+  {
+    chunk.PutBytes(mIRData.data(), irDataSize);
+  }
+
   return SerializeParams(chunk);
 }
 
@@ -613,6 +668,13 @@ void NeuralAmpModeler::_FallbackDSP(iplug::sample** inputs, iplug::sample** outp
 
 void NeuralAmpModeler::_ResetModelAndIR(const double sampleRate, const int maxBlockSize)
 {
+  // Safety check: If sample rate is not valid, skip reset
+  // This prevents crashes during initialization before sample rate is set
+  if (sampleRate <= 0.0)
+  {
+    return;
+  }
+
   // Model
   if (mStagedModel != nullptr)
   {
@@ -626,20 +688,39 @@ void NeuralAmpModeler::_ResetModelAndIR(const double sampleRate, const int maxBl
   // IR
   if (mStagedIR != nullptr)
   {
-    const double irSampleRate = mStagedIR->GetSampleRate();
-    if (irSampleRate != sampleRate)
+    // Layer 8: Check IR state before resampling
+    // Don't try to resample an IR that failed to load properly
+    if (mStagedIR->GetWavState() == dsp::wav::LoadReturnCode::SUCCESS)
     {
-      const auto irData = mStagedIR->GetData();
-      mStagedIR = std::make_unique<dsp::ImpulseResponse>(irData, sampleRate);
+      const double irSampleRate = mStagedIR->GetSampleRate();
+      if (irSampleRate != sampleRate)
+      {
+        const auto irData = mStagedIR->GetData();
+        mStagedIR = std::make_unique<dsp::ImpulseResponse>(irData, sampleRate);
+      }
+    }
+    else
+    {
+      // IR is in error state - discard it
+      mStagedIR = nullptr;
     }
   }
   else if (mIR != nullptr)
   {
-    const double irSampleRate = mIR->GetSampleRate();
-    if (irSampleRate != sampleRate)
+    // Layer 8: Check IR state before resampling
+    if (mIR->GetWavState() == dsp::wav::LoadReturnCode::SUCCESS)
     {
-      const auto irData = mIR->GetData();
-      mStagedIR = std::make_unique<dsp::ImpulseResponse>(irData, sampleRate);
+      const double irSampleRate = mIR->GetSampleRate();
+      if (irSampleRate != sampleRate)
+      {
+        const auto irData = mIR->GetData();
+        mStagedIR = std::make_unique<dsp::ImpulseResponse>(irData, sampleRate);
+      }
+    }
+    else
+    {
+      // IR is in error state - don't try to resample it
+      // Keep existing mIR but don't create staged version
     }
   }
 }
@@ -689,14 +770,26 @@ void NeuralAmpModeler::_SetOutputGain()
 std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
 {
   WDL_String previousNAMPath = mNAMPath;
+  const double sampleRate = GetSampleRate();
+
+  // Safety check: If sample rate is not set yet, defer model loading
+  if (sampleRate <= 0.0)
+  {
+    return "Sample rate not initialized";
+  }
+
   try
   {
     auto dspPath = std::filesystem::u8path(modelPath.Get());
     std::unique_ptr<nam::DSP> model = nam::get_dsp(dspPath);
-    std::unique_ptr<ResamplingNAM> temp = std::make_unique<ResamplingNAM>(std::move(model), GetSampleRate());
-    temp->Reset(GetSampleRate(), GetBlockSize());
+    std::unique_ptr<ResamplingNAM> temp = std::make_unique<ResamplingNAM>(std::move(model), sampleRate);
+    temp->Reset(sampleRate, GetBlockSize());
     mStagedModel = std::move(temp);
     mNAMPath = modelPath;
+
+    // Clear cached data - will be read during save if needed
+    mNAMData.clear();
+
     SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagLoadedModel, mNAMPath.GetLength(), mNAMPath.Get());
   }
   catch (std::runtime_error& e)
@@ -721,6 +814,14 @@ dsp::wav::LoadReturnCode NeuralAmpModeler::_StageIR(const WDL_String& irPath)
   // path and the model got caught on opposite sides of the fence...
   WDL_String previousIRPath = mIRPath;
   const double sampleRate = GetSampleRate();
+
+  // Safety check: If sample rate is not set yet, defer IR loading
+  // This prevents division by zero in ImpulseResponse::_SetWeights()
+  if (sampleRate <= 0.0)
+  {
+    return dsp::wav::LoadReturnCode::ERROR_OTHER;
+  }
+
   dsp::wav::LoadReturnCode wavState = dsp::wav::LoadReturnCode::ERROR_OTHER;
   try
   {
@@ -738,6 +839,10 @@ dsp::wav::LoadReturnCode NeuralAmpModeler::_StageIR(const WDL_String& irPath)
   if (wavState == dsp::wav::LoadReturnCode::SUCCESS)
   {
     mIRPath = irPath;
+
+    // Clear cached data - will be read during save if needed
+    mIRData.clear();
+
     SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagLoadedIR, mIRPath.GetLength(), mIRPath.Get());
   }
   else
@@ -909,6 +1014,220 @@ void NeuralAmpModeler::_UpdateMeters(sample** inputPointer, sample** outputPoint
   const int nChansHack = 1;
   mInputSender.ProcessBlock(inputPointer, (int)nFrames, kCtrlTagInputMeter, nChansHack);
   mOutputSender.ProcessBlock(outputPointer, (int)nFrames, kCtrlTagOutputMeter, nChansHack);
+}
+
+std::string NeuralAmpModeler::_StageModelFromData(const std::vector<uint8_t>& data, const WDL_String& originalPath)
+{
+  WDL_String previousNAMPath = mNAMPath;
+  const double sampleRate = GetSampleRate();
+
+  // Safety check: If sample rate is not set yet, defer model loading
+  // This prevents division by zero in resampling code
+  if (sampleRate <= 0.0)
+  {
+    return "Sample rate not initialized";
+  }
+
+  try
+  {
+    // Parse the JSON from memory
+    std::string jsonStr(data.begin(), data.end());
+    nlohmann::json j = nlohmann::json::parse(jsonStr);
+
+    // Build dspData structure
+    nam::dspData dspData;
+    dspData.version = j["version"];
+    dspData.architecture = j["architecture"];
+    dspData.config = j["config"];
+    dspData.metadata = j["metadata"];
+
+    // Extract weights
+    if (j.find("weights") != j.end())
+    {
+      dspData.weights = j["weights"].get<std::vector<float>>();
+    }
+
+    // Extract sample rate
+    if (j.find("sample_rate") != j.end())
+      dspData.expected_sample_rate = j["sample_rate"];
+    else
+      dspData.expected_sample_rate = -1.0;
+
+    // Create DSP from dspData
+    std::unique_ptr<nam::DSP> model = nam::get_dsp(dspData);
+    std::unique_ptr<ResamplingNAM> temp = std::make_unique<ResamplingNAM>(std::move(model), sampleRate);
+    temp->Reset(sampleRate, GetBlockSize());
+    mStagedModel = std::move(temp);
+    mNAMPath = originalPath;
+    SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagLoadedModel, mNAMPath.GetLength(), mNAMPath.Get());
+  }
+  catch (std::exception& e)
+  {
+    SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagLoadFailed);
+
+    if (mStagedModel != nullptr)
+    {
+      mStagedModel = nullptr;
+    }
+    mNAMPath = previousNAMPath;
+    std::cerr << "Failed to read DSP module from embedded data" << std::endl;
+    std::cerr << e.what() << std::endl;
+    return e.what();
+  }
+  return "";
+}
+
+dsp::wav::LoadReturnCode NeuralAmpModeler::_StageIRFromData(const std::vector<uint8_t>& data,
+                                                            const WDL_String& originalPath)
+{
+  WDL_String previousIRPath = mIRPath;
+  const double sampleRate = GetSampleRate();
+
+  // Safety check: If sample rate is not set yet, defer IR loading
+  // This prevents division by zero in ImpulseResponse::_SetWeights()
+  if (sampleRate <= 0.0)
+  {
+    return dsp::wav::LoadReturnCode::ERROR_OTHER;
+  }
+
+  dsp::wav::LoadReturnCode wavState = dsp::wav::LoadReturnCode::ERROR_OTHER;
+
+  try
+  {
+    // Parse WAV from memory
+    std::vector<float> audio;
+    double wavSampleRate = 0.0;
+
+    // Basic WAV parser for in-memory data
+    // WAV format: RIFF header (12 bytes) + fmt chunk + data chunk
+    if (data.size() < 44) // Minimum WAV file size
+    {
+      throw std::runtime_error("IR data too small to be valid WAV");
+    }
+
+    // Check RIFF header
+    if (data[0] != 'R' || data[1] != 'I' || data[2] != 'F' || data[3] != 'F')
+    {
+      throw std::runtime_error("Invalid WAV format - missing RIFF header");
+    }
+
+    // Check WAVE format
+    if (data[8] != 'W' || data[9] != 'A' || data[10] != 'V' || data[11] != 'E')
+    {
+      throw std::runtime_error("Invalid WAV format - not a WAVE file");
+    }
+
+    // Find fmt chunk
+    size_t pos = 12;
+    uint16_t audioFormat = 0;
+    uint16_t numChannels = 0;
+    uint32_t sampleRateInt = 0;
+    uint16_t bitsPerSample = 0;
+
+    while (pos < data.size() - 8)
+    {
+      std::string chunkID(data.begin() + pos, data.begin() + pos + 4);
+      uint32_t chunkSize = *reinterpret_cast<const uint32_t*>(&data[pos + 4]);
+
+      if (chunkID == "fmt ")
+      {
+        audioFormat = *reinterpret_cast<const uint16_t*>(&data[pos + 8]);
+        numChannels = *reinterpret_cast<const uint16_t*>(&data[pos + 10]);
+        sampleRateInt = *reinterpret_cast<const uint32_t*>(&data[pos + 12]);
+        bitsPerSample = *reinterpret_cast<const uint16_t*>(&data[pos + 22]);
+        wavSampleRate = static_cast<double>(sampleRateInt);
+      }
+      else if (chunkID == "data")
+      {
+        // Found data chunk
+        size_t dataStart = pos + 8;
+        size_t numSamples = chunkSize / (bitsPerSample / 8);
+
+        audio.resize(numSamples);
+
+        // Convert based on bits per sample
+        if (bitsPerSample == 16 && audioFormat == 1) // PCM 16-bit
+        {
+          for (size_t i = 0; i < numSamples; i++)
+          {
+            int16_t sample = *reinterpret_cast<const int16_t*>(&data[dataStart + i * 2]);
+            audio[i] = sample / 32768.0f;
+          }
+        }
+        else if (bitsPerSample == 24 && audioFormat == 1) // PCM 24-bit
+        {
+          for (size_t i = 0; i < numSamples; i++)
+          {
+            int32_t sample = 0;
+            sample |= static_cast<int32_t>(data[dataStart + i * 3]);
+            sample |= static_cast<int32_t>(data[dataStart + i * 3 + 1]) << 8;
+            sample |= static_cast<int32_t>(data[dataStart + i * 3 + 2]) << 16;
+            if (sample & 0x800000)
+              sample |= 0xFF000000; // Sign extend
+            audio[i] = sample / 8388608.0f;
+          }
+        }
+        else if (bitsPerSample == 32 && audioFormat == 3) // IEEE float 32-bit
+        {
+          for (size_t i = 0; i < numSamples; i++)
+          {
+            audio[i] = *reinterpret_cast<const float*>(&data[dataStart + i * 4]);
+          }
+        }
+        else
+        {
+          throw std::runtime_error("Unsupported WAV format");
+        }
+
+        break;
+      }
+
+      pos += 8 + chunkSize;
+    }
+
+    if (audio.empty())
+    {
+      throw std::runtime_error("No audio data found in WAV");
+    }
+
+    // Layer 9: Validate that fmt chunk was actually found and sample rate is valid
+    // WAV files can have missing fmt chunks or chunks in wrong order
+    if (wavSampleRate <= 0.0 || wavSampleRate != wavSampleRate)
+    {
+      throw std::runtime_error("Invalid or missing sample rate in WAV fmt chunk");
+    }
+
+    // Create IR from the loaded data
+    dsp::ImpulseResponse::IRData irData;
+    irData.mRawAudio = audio;
+    irData.mRawAudioSampleRate = wavSampleRate;
+
+    mStagedIR = std::make_unique<dsp::ImpulseResponse>(irData, sampleRate);
+    wavState = dsp::wav::LoadReturnCode::SUCCESS;
+  }
+  catch (std::exception& e)
+  {
+    wavState = dsp::wav::LoadReturnCode::ERROR_OTHER;
+    std::cerr << "Failed to load IR from embedded data:" << std::endl;
+    std::cerr << e.what() << std::endl;
+  }
+
+  if (wavState == dsp::wav::LoadReturnCode::SUCCESS)
+  {
+    mIRPath = originalPath;
+    SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagLoadedIR, mIRPath.GetLength(), mIRPath.Get());
+  }
+  else
+  {
+    if (mStagedIR != nullptr)
+    {
+      mStagedIR = nullptr;
+    }
+    mIRPath = previousIRPath;
+    SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagLoadFailed);
+  }
+
+  return wavState;
 }
 
 // HACK
