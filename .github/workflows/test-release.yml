@@ -1,0 +1,130 @@
+name: Test Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag (e.g., v0.7.13-test1)'
+        required: true
+        type: string
+      prerelease:
+        description: 'Mark as pre-release'
+        required: false
+        type: boolean
+        default: true
+
+env:
+  PROJECT_NAME: NeuralAmpModeler
+
+jobs:
+  build:
+    name: Build-${{matrix.os}}
+    runs-on: ${{matrix.os}}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+        include:
+          - os: macos-latest
+            build_dir: build-mac
+            artifact_name: NeuralAmpModeler-mac.zip
+            artifact_path: NeuralAmpModeler/build-mac/out/*.zip
+          - os: windows-latest
+            build_dir: build-win
+            artifact_name: NeuralAmpModeler-win.zip
+            artifact_path: NeuralAmpModeler/build-win/out/*.zip
+
+    steps:
+    - name: Check out repository
+      uses: actions/checkout@v2
+      with:
+        submodules: recursive
+
+    - name: Get VST3 SDK
+      run: |
+        cd iPlug2/Dependencies/IPlug
+        ./download-iplug-sdks.sh
+      shell: bash
+
+    - name: Get Prebuilt Libs
+      run: |
+        cd iPlug2/Dependencies
+        ./download-prebuilt-libs.sh
+      shell: bash
+
+    - name: Build macOS
+      if: matrix.os == 'macos-latest'
+      run: |
+        cd ${{env.PROJECT_NAME}}/scripts
+        ./makedist-mac.sh full zip
+      shell: bash
+
+    - name: Add msbuild to PATH (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: microsoft/setup-msbuild@v1.0.2
+
+    - name: Build Windows
+      if: matrix.os == 'windows-latest'
+      run: |
+        cd ${{env.PROJECT_NAME}}\scripts
+        .\makedist-win.bat full zip
+      shell: pwsh
+
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{matrix.artifact_name}}
+        path: ${{matrix.artifact_path}}
+        retention-days: 90
+
+  release:
+    name: Create Release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download macOS artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: NeuralAmpModeler-mac.zip
+        path: ./artifacts/mac
+
+    - name: Download Windows artifacts
+      uses: actions/download-artifact@v4
+      with:
+        name: NeuralAmpModeler-win.zip
+        path: ./artifacts/win
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ inputs.tag_name }}
+        name: Test Release ${{ inputs.tag_name }}
+        body: |
+          ## Test Build - ${{ inputs.tag_name }}
+          
+          **Branch:** ${{ github.ref_name }}
+          **Commit:** ${{ github.sha }}
+          
+          ### Downloads
+          - **macOS**: Universal binary (Intel + Apple Silicon) - VST3, AU, Standalone
+          - **Windows**: 64-bit - VST3, Standalone
+          
+          ### ⚠️ Testing Notice
+          This is a test/preview release built from a development branch.
+          - Not for production use
+          - May contain experimental features
+          - Report issues to the branch maintainer
+          
+          ### Installation
+          1. Download the appropriate ZIP for your platform
+          2. Extract the archive
+          3. Follow installation instructions in the included README
+        draft: false
+        prerelease: ${{ inputs.prerelease }}
+        files: |
+          ./artifacts/mac/*.zip
+          ./artifacts/win/*.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
