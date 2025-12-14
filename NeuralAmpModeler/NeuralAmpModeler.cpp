@@ -1,6 +1,7 @@
 #include <algorithm> // std::clamp, std::min
 #include <cmath> // pow
 #include <filesystem>
+#include <fstream>
 #include <iostream>
 #include <utility>
 
@@ -226,13 +227,13 @@ NeuralAmpModeler::NeuralAmpModeler(const InstanceInfo& info)
     // Getting started page listing additional resources
     const char* const getUrl = "https://www.neuralampmodeler.com/users#comp-marb84o5";
     pGraphics->AttachControl(
-      new NAMFileBrowserControl(modelArea, kMsgTagClearModel, defaultNamFileString.c_str(), "nam",
+      new NAMFileBrowserControl(modelArea, kMsgTagClearModel, kMsgTagSaveEmbeddedModel, defaultNamFileString.c_str(), "nam",
                                 loadModelCompletionHandler, style, fileSVG, crossSVG, leftArrowSVG, rightArrowSVG,
                                 fileBackgroundBitmap, globeSVG, "Get NAM Models", getUrl),
       kCtrlTagModelFileBrowser);
     pGraphics->AttachControl(new ISVGSwitchControl(irSwitchArea, {irIconOffSVG, irIconOnSVG}, kIRToggle));
     pGraphics->AttachControl(
-      new NAMFileBrowserControl(irArea, kMsgTagClearIR, defaultIRString.c_str(), "wav", loadIRCompletionHandler, style,
+      new NAMFileBrowserControl(irArea, kMsgTagClearIR, kMsgTagSaveEmbeddedIR, defaultIRString.c_str(), "wav", loadIRCompletionHandler, style,
                                 fileSVG, crossSVG, leftArrowSVG, rightArrowSVG, fileBackgroundBitmap, globeSVG,
                                 "Get IRs", getUrl),
       kCtrlTagIRFileBrowser);
@@ -417,6 +418,24 @@ bool NeuralAmpModeler::SerializeState(IByteChunk& chunk) const
   // when we unserialize)
   chunk.PutStr(mNAMPath.Get());
   chunk.PutStr(mIRPath.Get());
+  
+  // Embedded data (v0.7.13+)
+  // Format: NAMDataSize (int), [NAMData bytes if size>0], IRDataSize (int), [IRData bytes if size>0]
+  // This format is compatible with the original embed PR
+  int namDataSize = static_cast<int>(mEmbeddedNAMData.size());
+  chunk.Put(&namDataSize);
+  if (namDataSize > 0)
+  {
+    chunk.PutBytes(mEmbeddedNAMData.data(), namDataSize);
+  }
+  
+  int irDataSize = static_cast<int>(mEmbeddedIRData.size());
+  chunk.Put(&irDataSize);
+  if (irDataSize > 0)
+  {
+    chunk.PutBytes(mEmbeddedIRData.data(), irDataSize);
+  }
+  
   return SerializeParams(chunk);
 }
 
@@ -507,6 +526,50 @@ bool NeuralAmpModeler::OnMessage(int msgTag, int ctrlTag, int dataSize, const vo
   {
     case kMsgTagClearModel: mShouldRemoveModel = true; return true;
     case kMsgTagClearIR: mShouldRemoveIR = true; return true;
+    case kMsgTagSaveEmbeddedModel:
+    {
+      if (!mEmbeddedNAMData.empty() && GetUI())
+      {
+        WDL_String originalFileName(mNAMPath.get_filepart());
+        GetUI()->PromptForDirectory(WDL_String(),
+          [this, originalFileName](const WDL_String& fileName, const WDL_String& path) {
+            if (path.GetLength())
+            {
+              WDL_String fullPath(path);
+              fullPath.Append(originalFileName.Get());
+              std::ofstream file(fullPath.Get());
+              if (file.is_open())
+              {
+                file << mEmbeddedNAMData;
+                file.close();
+              }
+            }
+          });
+      }
+      return true;
+    }
+    case kMsgTagSaveEmbeddedIR:
+    {
+      if (!mEmbeddedIRData.empty() && GetUI())
+      {
+        WDL_String originalFileName(mIRPath.get_filepart());
+        GetUI()->PromptForDirectory(WDL_String(),
+          [this, originalFileName](const WDL_String& fileName, const WDL_String& path) {
+            if (path.GetLength())
+            {
+              WDL_String fullPath(path);
+              fullPath.Append(originalFileName.Get());
+              std::ofstream file(fullPath.Get(), std::ios::binary);
+              if (file.is_open())
+              {
+                file.write(reinterpret_cast<const char*>(mEmbeddedIRData.data()), mEmbeddedIRData.size());
+                file.close();
+              }
+            }
+          });
+      }
+      return true;
+    }
     case kMsgTagHighlightColor:
     {
       mHighLightColor.Set((const char*)pData);
@@ -691,16 +754,48 @@ std::string NeuralAmpModeler::_StageModel(const WDL_String& modelPath)
   WDL_String previousNAMPath = mNAMPath;
   try
   {
+#ifdef _WIN32
+    OutputDebugStringA("NAM _StageModel: Attempting to load: ");
+    OutputDebugStringA(modelPath.Get());
+    OutputDebugStringA("\n");
+#endif
     auto dspPath = std::filesystem::u8path(modelPath.Get());
+#ifdef _WIN32
+    char msg[200];
+    sprintf(msg, "NAM _StageModel: File exists = %d\n", std::filesystem::exists(dspPath) ? 1 : 0);
+    OutputDebugStringA(msg);
+#endif
     std::unique_ptr<nam::DSP> model = nam::get_dsp(dspPath);
     std::unique_ptr<ResamplingNAM> temp = std::make_unique<ResamplingNAM>(std::move(model), GetSampleRate());
     temp->Reset(GetSampleRate(), GetBlockSize());
     mStagedModel = std::move(temp);
     mNAMPath = modelPath;
+    
+    // Read file content for embedding in session
+    mEmbeddedNAMData.clear();
+    std::ifstream file(dspPath, std::ios::binary | std::ios::ate);
+    if (file.is_open())
+    {
+      std::streamsize size = file.tellg();
+      file.seekg(0, std::ios::beg);
+      mEmbeddedNAMData.resize(static_cast<size_t>(size));
+      file.read(reinterpret_cast<char*>(mEmbeddedNAMData.data()), size);
+    }
+    
     SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagLoadedModel, mNAMPath.GetLength(), mNAMPath.Get());
+    // Signal that embedded data is available for right-click save
+    SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagHasEmbeddedModel, mEmbeddedNAMData.empty() ? 0 : 1, nullptr);
+#ifdef _WIN32
+    OutputDebugStringA("NAM _StageModel: SUCCESS\n");
+#endif
   }
   catch (std::runtime_error& e)
   {
+#ifdef _WIN32
+    OutputDebugStringA("NAM _StageModel: EXCEPTION: ");
+    OutputDebugStringA(e.what());
+    OutputDebugStringA("\n");
+#endif
     SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagLoadFailed);
 
     if (mStagedModel != nullptr)
@@ -738,7 +833,22 @@ dsp::wav::LoadReturnCode NeuralAmpModeler::_StageIR(const WDL_String& irPath)
   if (wavState == dsp::wav::LoadReturnCode::SUCCESS)
   {
     mIRPath = irPath;
+    
+    // Read file content for embedding in session
+    mEmbeddedIRData.clear();
+    auto irPathU8 = std::filesystem::u8path(irPath.Get());
+    std::ifstream file(irPathU8, std::ios::binary | std::ios::ate);
+    if (file.is_open())
+    {
+      std::streamsize size = file.tellg();
+      file.seekg(0, std::ios::beg);
+      mEmbeddedIRData.resize(static_cast<size_t>(size));
+      file.read(reinterpret_cast<char*>(mEmbeddedIRData.data()), size);
+    }
+    
     SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagLoadedIR, mIRPath.GetLength(), mIRPath.Get());
+    // Signal that embedded data is available for right-click save
+    SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagHasEmbeddedIR, mEmbeddedIRData.empty() ? 0 : 1, nullptr);
   }
   else
   {
@@ -747,6 +857,80 @@ dsp::wav::LoadReturnCode NeuralAmpModeler::_StageIR(const WDL_String& irPath)
       mStagedIR = nullptr;
     }
     mIRPath = previousIRPath;
+    SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagLoadFailed);
+  }
+
+  return wavState;
+}
+
+std::string NeuralAmpModeler::_StageModelFromData(const std::string& jsonContent, const WDL_String& originalPath)
+{
+  try
+  {
+    std::unique_ptr<nam::DSP> model = nam::get_dsp_from_json(jsonContent);
+    std::unique_ptr<ResamplingNAM> temp = std::make_unique<ResamplingNAM>(std::move(model), GetSampleRate());
+    temp->Reset(GetSampleRate(), GetBlockSize());
+    mStagedModel = std::move(temp);
+    // Use original path if provided, otherwise mark as embedded
+    if (originalPath.GetLength())
+      mNAMPath = originalPath;
+    else
+      mNAMPath.Set("[Embedded]");
+    mEmbeddedNAMData = jsonContent;
+    SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagLoadedModel, mNAMPath.GetLength(), mNAMPath.Get());
+    // Signal that embedded data is available for right-click save
+    SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagHasEmbeddedModel, 1, nullptr);
+  }
+  catch (std::runtime_error& e)
+  {
+    SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagLoadFailed);
+    if (mStagedModel != nullptr)
+    {
+      mStagedModel = nullptr;
+    }
+    mEmbeddedNAMData.clear();
+    std::cerr << "Failed to load embedded DSP module" << std::endl;
+    std::cerr << e.what() << std::endl;
+    return e.what();
+  }
+  return "";
+}
+
+dsp::wav::LoadReturnCode NeuralAmpModeler::_StageIRFromData(const std::vector<uint8_t>& wavData, const WDL_String& originalPath)
+{
+  const double sampleRate = GetSampleRate();
+  dsp::wav::LoadReturnCode wavState = dsp::wav::LoadReturnCode::ERROR_OTHER;
+  try
+  {
+    mStagedIR = std::make_unique<dsp::ImpulseResponse>(wavData, sampleRate);
+    wavState = mStagedIR->GetWavState();
+  }
+  catch (std::runtime_error& e)
+  {
+    wavState = dsp::wav::LoadReturnCode::ERROR_OTHER;
+    std::cerr << "Caught unhandled exception while attempting to load embedded IR:" << std::endl;
+    std::cerr << e.what() << std::endl;
+  }
+
+  if (wavState == dsp::wav::LoadReturnCode::SUCCESS)
+  {
+    // Use original path if provided, otherwise mark as embedded
+    if (originalPath.GetLength())
+      mIRPath = originalPath;
+    else
+      mIRPath.Set("[Embedded]");
+    mEmbeddedIRData = wavData;
+    SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagLoadedIR, mIRPath.GetLength(), mIRPath.Get());
+    // Signal that embedded data is available for right-click save
+    SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagHasEmbeddedIR, 1, nullptr);
+  }
+  else
+  {
+    if (mStagedIR != nullptr)
+    {
+      mStagedIR = nullptr;
+    }
+    mEmbeddedIRData.clear();
     SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagLoadFailed);
   }
 

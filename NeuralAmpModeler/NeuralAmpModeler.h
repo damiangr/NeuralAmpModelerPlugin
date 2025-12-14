@@ -69,10 +69,14 @@ enum EMsgTags
   kMsgTagClearModel = 0,
   kMsgTagClearIR,
   kMsgTagHighlightColor,
+  kMsgTagSaveEmbeddedModel,
+  kMsgTagSaveEmbeddedIR,
   // The following tags are from DSP -> UI
   kMsgTagLoadFailed,
   kMsgTagLoadedModel,
   kMsgTagLoadedIR,
+  kMsgTagHasEmbeddedModel,  // Signal that embedded model data is available
+  kMsgTagHasEmbeddedIR,     // Signal that embedded IR data is available
   kNumMsgTags
 };
 
@@ -220,10 +224,15 @@ private:
   // Loads a NAM model and stores it to mStagedNAM
   // Returns an empty string on success, or an error message on failure.
   std::string _StageModel(const WDL_String& dspFile);
+  // Loads a NAM model from embedded JSON data
+  // Returns an empty string on success, or an error message on failure.
+  std::string _StageModelFromData(const std::string& jsonContent, const WDL_String& originalPath);
   // Loads an IR and stores it to mStagedIR.
   // Return status code so that error messages can be relayed if
   // it wasn't successful.
   dsp::wav::LoadReturnCode _StageIR(const WDL_String& irPath);
+  // Loads an IR from embedded WAV data
+  dsp::wav::LoadReturnCode _StageIRFromData(const std::vector<uint8_t>& wavData, const WDL_String& originalPath);
 
   bool _HaveModel() const { return this->mModel != nullptr; };
   // Prepare the input & output buffers
@@ -306,6 +315,10 @@ private:
   WDL_String mNAMPath;
   // Path to IR (.wav file)
   WDL_String mIRPath;
+
+  // Embedded data (for presets saved with embedded NAM/IR)
+  std::string mEmbeddedNAMData;
+  std::vector<uint8_t> mEmbeddedIRData;
 
   WDL_String mHighLightColor{PluginColors::NAM_THEMECOLOR.ToColorCode()};
 

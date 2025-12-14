@@ -18,6 +18,13 @@
 
 // Add new unserialization versions to the top, then add logic to the class method at the bottom.
 
+#ifdef _WIN32
+#include <windows.h>
+#define DEBUG_LOG(msg) OutputDebugStringA(msg)
+#else
+#define DEBUG_LOG(msg) std::cerr << msg
+#endif
+
 // Boilerplate
 
 void NeuralAmpModeler::_UnserializeApplyConfig(nlohmann::json& config)
@@ -57,13 +64,70 @@ void NeuralAmpModeler::_UnserializeApplyConfig(nlohmann::json& config)
   mNAMPath.Set(static_cast<std::string>(config["NAMPath"]).c_str());
   mIRPath.Set(static_cast<std::string>(config["IRPath"]).c_str());
 
-  if (mNAMPath.GetLength())
+  DEBUG_LOG("NAM Unserialize: NAMPath = ");
+  DEBUG_LOG(mNAMPath.Get());
+  DEBUG_LOG("\n");
+
+  // Load NAM: Try file path first, fall back to embedded data
+  bool namLoaded = false;
+  if (mNAMPath.GetLength() && strcmp(mNAMPath.Get(), "[Embedded]") != 0)
   {
-    _StageModel(mNAMPath);
+    DEBUG_LOG("NAM Unserialize: Trying to load from file path\n");
+    std::string result = _StageModel(mNAMPath);
+    namLoaded = result.empty();
+    if (namLoaded)
+      DEBUG_LOG("NAM Unserialize: File load SUCCESS\n");
+    else
+      DEBUG_LOG("NAM Unserialize: File load FAILED\n");
   }
-  if (mIRPath.GetLength())
+  if (!namLoaded && config.contains("EmbeddedNAMData"))
   {
-    _StageIR(mIRPath);
+    std::string embeddedNAM = config["EmbeddedNAMData"];
+    char sizeMsg[100];
+    sprintf(sizeMsg, "NAM Unserialize: EmbeddedNAMData size = %zu\n", embeddedNAM.size());
+    DEBUG_LOG(sizeMsg);
+    if (!embeddedNAM.empty())
+    {
+      DEBUG_LOG("NAM Unserialize: Calling _StageModelFromData\n");
+      std::string result = _StageModelFromData(embeddedNAM, mNAMPath);
+      if (result.empty())
+        DEBUG_LOG("NAM Unserialize: Embedded load SUCCESS\n");
+      else
+      {
+        DEBUG_LOG("NAM Unserialize: Embedded load FAILED: ");
+        DEBUG_LOG(result.c_str());
+        DEBUG_LOG("\n");
+      }
+    }
+    else
+    {
+      DEBUG_LOG("NAM Unserialize: EmbeddedNAMData is empty!\n");
+    }
+  }
+  else if (!namLoaded)
+  {
+    DEBUG_LOG("NAM Unserialize: No EmbeddedNAMData in config\n");
+  }
+
+  // Load IR: Try file path first, fall back to embedded data
+  bool irLoaded = false;
+  if (mIRPath.GetLength() && strcmp(mIRPath.Get(), "[Embedded]") != 0)
+  {
+    DEBUG_LOG("NAM Unserialize: Trying to load IR from file path\n");
+    dsp::wav::LoadReturnCode result = _StageIR(mIRPath);
+    irLoaded = (result == dsp::wav::LoadReturnCode::SUCCESS);
+  }
+  if (!irLoaded && config.contains("EmbeddedIRData"))
+  {
+    std::vector<uint8_t> embeddedIR = config["EmbeddedIRData"];
+    char sizeMsg[100];
+    sprintf(sizeMsg, "NAM Unserialize: EmbeddedIRData size = %zu\n", embeddedIR.size());
+    DEBUG_LOG(sizeMsg);
+    if (!embeddedIR.empty())
+    {
+      DEBUG_LOG("NAM Unserialize: Calling _StageIRFromData\n");
+      _StageIRFromData(embeddedIR, mIRPath);
+    }
   }
 }
 
@@ -97,11 +161,89 @@ void _RenameKeys(nlohmann::json& j, std::unordered_map<std::string, std::string>
   }
 }
 
+// v0.7.13
+
+void _UpdateConfigFrom_0_7_13(nlohmann::json& config)
+{
+  // Fill me in once something changes!
+}
+
+int _GetConfigFrom_0_7_13(const iplug::IByteChunk& chunk, int startPos, nlohmann::json& config)
+{
+  DEBUG_LOG("NAM _GetConfigFrom_0_7_13: Starting\n");
+  int pos = startPos;
+  WDL_String path;
+  pos = chunk.GetStr(path, pos);
+  config["NAMPath"] = std::string(path.Get());
+  DEBUG_LOG("NAM _GetConfigFrom_0_7_13: NAMPath = ");
+  DEBUG_LOG(path.Get());
+  DEBUG_LOG("\n");
+  pos = chunk.GetStr(path, pos);
+  config["IRPath"] = std::string(path.Get());
+
+  // Embedded data format: NAMDataSize (int), [NAMData bytes], IRDataSize (int), [IRData bytes]
+  char msg[200];
+  int namDataSize = 0;
+  pos = chunk.Get(&namDataSize, pos);
+  sprintf(msg, "NAM _GetConfigFrom_0_7_13: namDataSize = %d\n", namDataSize);
+  DEBUG_LOG(msg);
+  if (namDataSize > 0)
+  {
+    std::vector<uint8_t> namData(namDataSize);
+    pos = chunk.GetBytes(namData.data(), namDataSize, pos);
+    // Convert to string for JSON storage
+    std::string namStr(namData.begin(), namData.end());
+    config["EmbeddedNAMData"] = namStr;
+    sprintf(msg, "NAM _GetConfigFrom_0_7_13: EmbeddedNAM read %d bytes\n", namDataSize);
+    DEBUG_LOG(msg);
+  }
+
+  int irDataSize = 0;
+  pos = chunk.Get(&irDataSize, pos);
+  sprintf(msg, "NAM _GetConfigFrom_0_7_13: irDataSize = %d\n", irDataSize);
+  DEBUG_LOG(msg);
+  if (irDataSize > 0)
+  {
+    std::vector<uint8_t> irData(irDataSize);
+    pos = chunk.GetBytes(irData.data(), irDataSize, pos);
+    config["EmbeddedIRDataSize"] = irDataSize;
+    config["EmbeddedIRData"] = irData;
+  }
+
+  // Read parameters
+  std::vector<std::string> paramNames{"Input",
+                                      "Threshold",
+                                      "Bass",
+                                      "Middle",
+                                      "Treble",
+                                      "Output",
+                                      "NoiseGateActive",
+                                      "ToneStack",
+                                      "IRToggle",
+                                      "CalibrateInput",
+                                      "InputCalibrationLevel",
+                                      "OutputMode"};
+
+  for (auto it = paramNames.begin(); it != paramNames.end(); ++it)
+  {
+    double v = 0.0;
+    pos = chunk.Get(&v, pos);
+    config[*it] = v;
+  }
+
+  _UpdateConfigFrom_0_7_13(config);
+  return pos;
+}
+
 // v0.7.12
 
 void _UpdateConfigFrom_0_7_12(nlohmann::json& config)
 {
-  // Fill me in once something changes!
+  // No embedded data in 0.7.12, clear any flags
+  config.erase("EmbeddedNAMData");
+  config.erase("EmbeddedIRData");
+  config.erase("EmbeddedIRDataSize");
+  _UpdateConfigFrom_0_7_13(config);
 }
 
 int _GetConfigFrom_0_7_12(const iplug::IByteChunk& chunk, int startPos, nlohmann::json& config)
@@ -245,19 +387,30 @@ int NeuralAmpModeler::_UnserializeStateWithKnownVersion(const iplug::IByteChunk&
   WDL_String wVersion;
   pos = chunk.GetStr(wVersion, pos);
   std::string versionStr(wVersion.Get());
+  DEBUG_LOG("NAM Unserialize: Version = ");
+  DEBUG_LOG(versionStr.c_str());
+  DEBUG_LOG("\n");
   _Version version(versionStr);
   // Act accordingly
   nlohmann::json config;
-  if (version >= _Version(0, 7, 12))
+  if (version >= _Version(0, 7, 13))
   {
+    DEBUG_LOG("NAM Unserialize: Using _GetConfigFrom_0_7_13\n");
+    pos = _GetConfigFrom_0_7_13(chunk, pos, config);
+  }
+  else if (version >= _Version(0, 7, 12))
+  {
+    DEBUG_LOG("NAM Unserialize: Using _GetConfigFrom_0_7_12\n");
     pos = _GetConfigFrom_0_7_12(chunk, pos, config);
   }
   else if (version >= _Version(0, 7, 10))
   {
+    DEBUG_LOG("NAM Unserialize: Using _GetConfigFrom_0_7_10\n");
     pos = _GetConfigFrom_0_7_10(chunk, pos, config);
   }
   else if (version >= _Version(0, 7, 9))
   {
+    DEBUG_LOG("NAM Unserialize: Using _GetConfigFrom_Earlier\n");
     pos = _GetConfigFrom_Earlier(chunk, pos, config);
   }
   else
