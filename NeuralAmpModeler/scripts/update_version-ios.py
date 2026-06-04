@@ -57,7 +57,7 @@ def main():
         NSEXTENSIONPOINTIDENTIFIER = "com.apple.AudioUnit"
 
     plistpath = (
-        projectpath + "/resources/" + config["BUNDLE_NAME"] + "-iOS-AUv3-Info.plist"
+        projectpath + "/resources/NeuralAmpModeler-iOS-AUv3-Info.plist"
     )
 
     NSEXTENSIONATTRDICT = dict(
@@ -125,7 +125,7 @@ def main():
                 "factoryFunction"
             ] = "IPlugAUViewController_vNeuralAmpModeler"
             auv3["NSExtension"]["NSExtensionMainStoryboard"] = (
-                config["BUNDLE_NAME"] + "-iOS-MainInterface"
+                "NeuralAmpModeler-iOS-MainInterface"
             )
         else:
             auv3["NSExtension"][
@@ -137,7 +137,7 @@ def main():
 
     # Standalone APP
 
-    plistpath = projectpath + "/resources/" + config["BUNDLE_NAME"] + "-iOS-Info.plist"
+    plistpath = projectpath + "/resources/NeuralAmpModeler-iOS-Info.plist"
     with open(plistpath, "rb") as f:
         iOSapp = plistlib.load(f)
         iOSapp["CFBundleExecutable"] = config["BUNDLE_NAME"]
