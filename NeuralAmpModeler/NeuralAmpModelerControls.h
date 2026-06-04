@@ -215,6 +215,18 @@ public:
   {
   }
 
+  void OnMouseDown(float x, float y, const IMouseMod& mod) override
+  {
+    if (mod.R && mRightClickFunc)
+    {
+      mRightClickFunc(this, x, y);
+      return;
+    }
+    IVButtonControl::OnMouseDown(x, y, mod);
+  }
+
+  void SetRightClickFunc(std::function<void(IControl*, float, float)> func) { mRightClickFunc = func; }
+
   void SetLabelAndTooltip(const char* str)
   {
     SetLabelStr(str);
@@ -242,6 +254,9 @@ public:
     SetLabelStr(ellipsizedFileName.c_str());
     SetTooltip(fileName.get_filepart());
   }
+
+private:
+  std::function<void(IControl*, float, float)> mRightClickFunc;
 };
 
 // URL control for the "Get" models/irs links
@@ -264,12 +279,13 @@ public:
 class NAMFileBrowserControl : public IDirBrowseControlBase
 {
 public:
-  NAMFileBrowserControl(const IRECT& bounds, int clearMsgTag, const char* labelStr, const char* fileExtension,
+  NAMFileBrowserControl(const IRECT& bounds, int clearMsgTag, int saveMsgTag, const char* labelStr, const char* fileExtension,
                         IFileDialogCompletionHandlerFunc ch, const IVStyle& style, const ISVG& loadSVG,
                         const ISVG& clearSVG, const ISVG& leftSVG, const ISVG& rightSVG, const IBitmap& bitmap,
                         const ISVG& globeSVG, const char* getButtonLabel, const char* getButtonURL)
   : IDirBrowseControlBase(bounds, fileExtension, false, false)
   , mClearMsgTag(clearMsgTag)
+  , mSaveMsgTag(saveMsgTag)
   , mDefaultLabelStr(labelStr)
   , mCompletionHandlerFunc(ch)
   , mStyle(style.WithColor(kFG, COLOR_TRANSPARENT).WithDrawFrame(false))
@@ -292,6 +308,17 @@ public:
   {
     if (pSelectedMenu)
     {
+      // Handle save menu from right-click
+      if (mShowingSaveMenu)
+      {
+        mShowingSaveMenu = false;
+        if (pSelectedMenu->GetChosenItemIdx() == 0)
+        {
+          GetDelegate()->SendArbitraryMsgFromUI(mSaveMsgTag);
+        }
+        return;
+      }
+
       IPopupMenu::Item* pItem = pSelectedMenu->GetChosenItem();
 
       if (pItem)
@@ -397,8 +424,17 @@ public:
       ->SetAnimationEndActionFunction(prevFileFunc);
     AddChildControl(new NAMSquareButtonControl(rightButtonBounds, DefaultClickActionFunc, mRightSVG))
       ->SetAnimationEndActionFunction(nextFileFunc);
-    AddChildControl(mFileNameControl = new NAMFileNameControl(fileNameButtonBounds, mDefaultLabelStr.Get(), mStyle))
-      ->SetAnimationEndActionFunction(chooseFileFunc);
+    mFileNameControl = new NAMFileNameControl(fileNameButtonBounds, mDefaultLabelStr.Get(), mStyle);
+    mFileNameControl->SetRightClickFunc([this](IControl* pCaller, float x, float y) {
+      if (mBrowserState == NAMBrowserState::Loaded && mHasEmbeddedData)
+      {
+        IPopupMenu menu;
+        menu.AddItem("Save embedded to file...");
+        mShowingSaveMenu = true;
+        GetUI()->CreatePopupMenu(*this, menu, x, y);
+      }
+    });
+    AddChildControl(mFileNameControl)->SetAnimationEndActionFunction(chooseFileFunc);
 
     // creates both right-side controls but only show one based on state
     mClearButton = new NAMSquareButtonControl(clearAndGetButtonBounds, DefaultClickActionFunc, mClearSVG);
@@ -433,6 +469,7 @@ public:
           std::string label(std::string("(FAILED) ") + std::string(mFileNameControl->GetLabelStr()));
           mFileNameControl->SetLabelAndTooltip(label.c_str());
           SetBrowserState(NAMBrowserState::Empty);
+          mHasEmbeddedData = false;
         }
         break;
       case kMsgTagLoadedModel:
@@ -451,6 +488,10 @@ public:
         SetBrowserState(NAMBrowserState::Loaded);
       }
       break;
+      case kMsgTagHasEmbeddedModel:
+      case kMsgTagHasEmbeddedIR:
+        mHasEmbeddedData = (dataSize > 0);
+        break;
       default: break;
     }
   }
@@ -490,6 +531,9 @@ private:
   IBitmap mBitmap;
   ISVG mLoadSVG, mClearSVG, mLeftSVG, mRightSVG, mGlobeSVG;
   int mClearMsgTag;
+  int mSaveMsgTag;
+  bool mShowingSaveMenu = false;
+  bool mHasEmbeddedData = false;  // True when embedded data is available for saving
 
   // new members for the "Get" button
   const char* mGetButtonLabel;
