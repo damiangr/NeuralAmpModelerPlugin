@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>AUv3Framework</string>
 	<key>CFBundleExecutable</key>
-	<string>AUv3Framework</string>
+	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleInfoDictionaryVersion</key>

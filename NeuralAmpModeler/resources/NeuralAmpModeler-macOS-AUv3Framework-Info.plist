@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleExecutable</key>
-	<string>NeuralAmpModelerAU</string>
+	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
 	<string>com.StevenAtkinson.app.NeuralAmpModeler.AUv3Framework</string>
 	<key>CFBundleInfoDictionaryVersion</key>
