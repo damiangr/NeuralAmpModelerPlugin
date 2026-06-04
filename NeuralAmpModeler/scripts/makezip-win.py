@@ -64,8 +64,8 @@ def main():
     )
 
     files = [
-        projectpath + "\\build-win\\pdbs\\Gateway_EP-vst3_x64.pdb",
-        projectpath + "\\build-win\\pdbs\\Gateway_EP-app_x64.pdb",
+        projectpath + "\\build-win\\pdbs\\NeuralAmpModeler-vst3_x64.pdb",
+        projectpath + "\\build-win\\pdbs\\NeuralAmpModeler-app_x64.pdb",
     ]
 
     for f in files:
