@@ -505,6 +505,7 @@ void NeuralAmpModeler::OnUIOpen()
   if (mNAMPath.GetLength())
   {
     SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagLoadedModel, mNAMPath.GetLength(), mNAMPath.Get());
+    SendControlMsgFromDelegate(kCtrlTagModelFileBrowser, kMsgTagHasEmbeddedModel, mEmbeddedNAMData.empty() ? 0 : 1, nullptr);
     // If it's not loaded yet, then mark as failed.
     // If it's yet to be loaded, then the completion handler will set us straight once it runs.
     if (mModel == nullptr && mStagedModel == nullptr)
@@ -514,6 +515,7 @@ void NeuralAmpModeler::OnUIOpen()
   if (mIRPath.GetLength())
   {
     SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagLoadedIR, mIRPath.GetLength(), mIRPath.Get());
+    SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagHasEmbeddedIR, mEmbeddedIRData.empty() ? 0 : 1, nullptr);
     if (mIR == nullptr && mStagedIR == nullptr)
       SendControlMsgFromDelegate(kCtrlTagIRFileBrowser, kMsgTagLoadFailed);
   }
