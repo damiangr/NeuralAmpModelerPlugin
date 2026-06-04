@@ -28,10 +28,10 @@ def main():
     files = []
 
     if not zip:
-        installer = "\\build-win\\installer\\NeuralAmpModeler Installer.exe"
+        installer = "\\build-win\\installer\\Gateway_EP Installer.exe"
 
         if demo:
-            installer = "\\build-win\\installer\\NeuralAmpModeler Demo Installer.exe"
+            installer = "\\build-win\\installer\\Gateway_EP Demo Installer.exe"
 
         files = [
             projectpath + installer,
@@ -42,8 +42,8 @@ def main():
     else:
         files = [
             projectpath
-            + "\\build-win\\NeuralAmpModeler.vst3\\Contents\\x86_64-win\\NeuralAmpModeler.vst3",
-            projectpath + "\\build-win\\NeuralAmpModeler_x64.exe",
+            + "\\build-win\\Gateway_EP.vst3\\Contents\\x86_64-win\\Gateway_EP.vst3",
+            projectpath + "\\build-win\\Gateway_EP_x64.exe",
         ]
 
     zipname = get_archive_name(projectpath, "win", "demo" if demo == 1 else "full")
@@ -64,8 +64,8 @@ def main():
     )
 
     files = [
-        projectpath + "\\build-win\\pdbs\\NeuralAmpModeler-vst3_x64.pdb",
-        projectpath + "\\build-win\\pdbs\\NeuralAmpModeler-app_x64.pdb",
+        projectpath + "\\build-win\\pdbs\\Gateway_EP-vst3_x64.pdb",
+        projectpath + "\\build-win\\pdbs\\Gateway_EP-app_x64.pdb",
     ]
 
     for f in files:

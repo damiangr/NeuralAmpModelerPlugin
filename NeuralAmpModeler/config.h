@@ -1,4 +1,4 @@
-#define PLUG_NAME "Gateway"
+#define PLUG_NAME "Gateway_EP"
 #define PLUG_MFR "Steven Atkinson"
 #define PLUG_VERSION_HEX 0x0000070f
 #define PLUG_VERSION_STR "0.7.15"
@@ -8,7 +8,7 @@
 #define PLUG_EMAIL_STR "spam@me.com"
 #define PLUG_COPYRIGHT_STR "Copyright 2022 Steven Atkinson"
 #define PLUG_CLASS_NAME NeuralAmpModeler
-#define BUNDLE_NAME "NeuralAmpModeler"
+#define BUNDLE_NAME "Gateway_EP"
 #define BUNDLE_MFR "StevenAtkinson"
 #define BUNDLE_DOMAIN "com"
 

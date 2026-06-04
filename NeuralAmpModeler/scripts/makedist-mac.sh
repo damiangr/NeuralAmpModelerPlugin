@@ -158,7 +158,7 @@ fi
 #---------------------------------------------------------------------------------------------------------
 # build xcode project. Change target to build individual formats, or add to All target in the xcode project
 
-xcodebuild -project ./projects/$PLUGIN_NAME-macOS.xcodeproj -xcconfig ./config/$PLUGIN_NAME-mac.xcconfig DEMO_VERSION=$DEMO -target "All" -UseModernBuildSystem=NO -configuration Release | tee build-mac.log | xcpretty #&& exit ${PIPESTATUS[0]}
+xcodebuild -project ./projects/NeuralAmpModeler-macOS.xcodeproj -xcconfig ./config/NeuralAmpModeler-mac.xcconfig DEMO_VERSION=$DEMO -target "All" -UseModernBuildSystem=NO -configuration Release | tee build-mac.log | xcpretty #&& exit ${PIPESTATUS[0]}
 
 if [ "${PIPESTATUS[0]}" -ne "0" ]; then
   echo "ERROR: build failed, aborting"
@@ -176,15 +176,15 @@ echo "setting icons"
 echo ""
 
 if [ -d $AU ]; then
-  ./$SCRIPTS/SetFileIcon -image resources/$PLUGIN_NAME.icns -file $AU
+  ./$SCRIPTS/SetFileIcon -image resources/NeuralAmpModeler.icns -file $AU
 fi
 
 if [ -d $VST3 ]; then
-  ./$SCRIPTS/SetFileIcon -image resources/$PLUGIN_NAME.icns -file $VST3
+  ./$SCRIPTS/SetFileIcon -image resources/NeuralAmpModeler.icns -file $VST3
 fi
 
 if [ -d "${AAX}" ]; then
-  ./$SCRIPTS/SetFileIcon -image resources/$PLUGIN_NAME.icns -file "${AAX}"
+  ./$SCRIPTS/SetFileIcon -image resources/NeuralAmpModeler.icns -file "${AAX}"
 fi
 
 #---------------------------------------------------------------------------------------------------------
@@ -261,7 +261,7 @@ if [ $BUILD_INSTALLER == 1 ]; then
   fi
 
   #set installer icon
-  ./$SCRIPTS/SetFileIcon -image resources/$PLUGIN_NAME.icns -file "${PKG}"
+  ./$SCRIPTS/SetFileIcon -image resources/NeuralAmpModeler.icns -file "${PKG}"
 
   #---------------------------------------------------------------------------------------------------------
   # make dmg, can use dmgcanvas http://www.araelium.com/dmgcanvas/ to make a nice dmg, fallback to hdiutil
@@ -273,7 +273,7 @@ if [ $BUILD_INSTALLER == 1 ]; then
   else
     cp installer/changelog.txt build-mac/installer/
     cp installer/known-issues.txt build-mac/installer/
-    cp "manual/$PLUGIN_NAME manual.pdf" build-mac/installer/
+    cp "manual/NeuralAmpModeler manual.pdf" build-mac/installer/
     hdiutil create build-mac/$ARCHIVE_NAME.dmg -format UDZO -srcfolder build-mac/installer/ -ov -anyowners -volname $PLUGIN_NAME
   fi
 
