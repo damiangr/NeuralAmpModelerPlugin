@@ -26,7 +26,10 @@ if [ "$VERSION" == "" ]; then
   exit 1
 fi
 
-PRODUCT_NAME=NeuralAmpModeler
+PRODUCT_NAME=`grep "^#define BUNDLE_NAME " config.h`
+PRODUCT_NAME=${PRODUCT_NAME//\#define BUNDLE_NAME }
+PRODUCT_NAME=${PRODUCT_NAME//\"}
+PRODUCT_NAME=$(echo "$PRODUCT_NAME" | tr -d '\r')
 PKG_ID_PREFIX="${INSTALLER_PKG_ID_PREFIX:-com.StevenAtkinson}"
 
 # locations
@@ -171,7 +174,7 @@ cat > ${TARGET_DIR}/distribution.xml << XMLEND
     <license file="license.rtf" mime-type="application/rtf"/>
     <readme file="readme-mac.rtf" mime-type="application/rtf"/>
     <welcome file="intro.rtf" mime-type="application/rtf"/>
-    <background file="${PRODUCT_NAME}-installer-bg.png" alignment="topleft" scaling="none"/>
+    <background file="NeuralAmpModeler-installer-bg.png" alignment="topleft" scaling="none"/>
     ${VST3_PKG_REF}
     ${AU_PKG_REF}
     ${AAX_PKG_REF}
