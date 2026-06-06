@@ -239,6 +239,19 @@ if [ $CODESIGN == 1 ]; then
   xattr -cr $VST3 
   codesign --force -s "${DEV_ID_APP_STR}" -v $VST3 --deep --strict
   #---------------------------------------------------------------------------------------------------------
+else
+  echo "ad-hoc code-signing binaries"
+  echo ""
+
+  codesign --force -s "-" $APP --deep
+  xattr -cr $AU 
+  codesign --force -s "-" $AU --deep
+  xattr -cr $VST3 
+  codesign --force -s "-" $VST3 --deep
+  if [ -d "${AAX}" ]; then
+    xattr -cr "${AAX}"
+    codesign --force -s "-" "${AAX}" --deep
+  fi
 fi
 
 if [ $BUILD_INSTALLER == 1 ]; then
